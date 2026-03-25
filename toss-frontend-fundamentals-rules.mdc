@@ -1,0 +1,765 @@
+---
+description: Frontend Fundamentals — four code-quality principles (readability, predictability, cohesion, coupling) and practical patterns
+alwaysApply: true
+---
+
+# Four Principles of Writing Good Code
+
+Context: [Frontend Fundamentals](https://frontend-fundamentals.com/code-quality/en/code/). Good frontend code is code that is **easy to change and ship**. Judge it with four lenses: **readability**, **predictability**, **cohesion**, and **coupling**. You rarely satisfy all four at once—prioritize based on the situation.
+
+---
+
+## 1. Readability
+
+Can readers see at a glance what the code does? Reduce how much context they must hold at once, and let the code read naturally from top to bottom.
+
+### 1.1 Separate code that doesn’t run together
+
+**Rule**  
+Do not keep branches that never execute at the same time (permissions, roles, etc.) tangled in a single function or component.
+
+**Reasoning**  
+When branches are interleaved, readers must track more context at once; mixed “blue path / red path” logic is hard to follow.
+
+**Recommended Pattern**  
+Keep a single top-level branch (`viewer ? A : B`) and move each path into its own component or function—for example `ViewerSubmitButton` / `AdminSubmitButton`—so each unit handles only one state.
+
+```typescript
+function SubmitButton() {
+  const isViewer = useRole() === "viewer";
+
+  return isViewer ? <ViewerSubmitButton /> : <AdminSubmitButton />;
+}
+
+function ViewerSubmitButton() {
+  return <TextButton disabled>Submit</TextButton>;
+}
+
+function AdminSubmitButton() {
+  useEffect(() => {
+    showButtonAnimation();
+  }, []);
+
+  return <Button type="submit">Submit</Button>;
+}
+```
+
+---
+
+### 1.2 Abstract implementation details
+
+**Rule**  
+Hide implementation the reader must parse at once (hook arguments, intermediate state names, raw constants) behind intention-revealing names and boundaries (wrappers, HOCs).
+
+**Reasoning**  
+People can only hold a limited amount of information at once. Exposed implementation makes the core purpose of a screen like `LoginStartPage` hard to see.
+
+**Recommended Pattern**
+
+- Login guard: an `AuthGuard` wrapper or `withAuthGuard` HOC owns “if already logged in, redirect home”; the page focuses on login UI.
+- Complex consent + overlay: colocate button, consent flow, and follow-up actions in something like `InviteButton`; the page only renders `InviteButton`.  
+  Split abstractions so a reader tracks roughly six to seven chunks of context at a time.
+
+```typescript
+function App() {
+  return (
+    <AuthGuard>
+      <LoginStartPage />
+    </AuthGuard>
+  );
+}
+
+function AuthGuard({ children }) {
+  const status = useCheckLoginStatus();
+
+  useEffect(() => {
+    if (status === "LOGGED_IN") {
+      location.href = "/home";
+    }
+  }, [status]);
+
+  return status !== "LOGGED_IN" ? children : null;
+}
+
+function LoginStartPage() {
+  /* ... logic for login ... */
+
+  return <>{/* ... login related components ... */}</>;
+}
+```
+
+---
+
+### 1.3 Split by responsibility, not only by “type” of logic
+
+**Rule**  
+Avoid giant hooks or functions organized only by **shape** (“all query params”, “all APIs”). Split by **meaningful units** (per parameter, per feature).
+
+**Reasoning**  
+A hook like `usePageState()` that owns every URL param for a page can grow without bound and become long and hard to read. Any query change can also re-render every consumer of the hook.
+
+**Recommended Pattern**  
+Split into small hooks per query key, e.g. `useCardIdQueryParam()`. Names get clearer and the blast radius of edits shrinks.
+
+```typescript
+import { NumberParam, useQueryParam } from "use-query-params";
+
+export function useCardIdQueryParam() {
+  const [cardId, _setCardId] = useQueryParam("cardId", NumberParam);
+
+  const setCardId = useCallback((cardId: number) => {
+    _setCardId({ cardId }, "replaceIn");
+  }, []);
+
+  return [cardId ?? undefined, setCardId] as const;
+}
+```
+
+---
+
+### 1.4 Name complex conditions
+
+**Rule**  
+Give meaningful names—e.g. `isSameCategory`, `isPriceInRange`—to deeply nested conditions built from `filter`, `some`, and `&&`.
+
+**Reasoning**  
+Unnamed compound conditions force readers to track many things at once (working memory holds on the order of six items).
+
+**Recommended Pattern**  
+Use intermediate booleans or small steps so intent reads like prose (“same category and price in range”).  
+For something as simple as `arr.map(x => x * 2)` used once, extra naming is usually unnecessary.
+
+```typescript
+const matchedProducts = products.filter((product) => {
+  return product.categories.some((category) => {
+    const isSameCategory = category.id === targetCategory.id;
+    const isPriceInRange = product.prices.some(
+      (price) => price >= minPrice && price <= maxPrice,
+    );
+
+    return isSameCategory && isPriceInRange;
+  });
+});
+```
+
+---
+
+### 1.5 Name magic numbers (readability)
+
+**Rule**  
+Replace unexplained numeric or string literals with named constants.
+
+**Reasoning**  
+`delay(300)` alone does not say whether you wait for animation, server propagation, or leftover test code—collaborators may misunderstand and change it wrongly.
+
+**Recommended Pattern**  
+Name for context, e.g. `const ANIMATION_DELAY_MS = 300`, and call `delay(ANIMATION_DELAY_MS)`.
+
+```typescript
+const ANIMATION_DELAY_MS = 300;
+
+async function onLikeClick() {
+  await postLike(url);
+  await delay(ANIMATION_DELAY_MS);
+  await refetchPostLike();
+}
+```
+
+---
+
+### 1.6 Reduce context switching / eye movement
+
+**Rule**  
+Avoid layouts where understanding `policy.canInvite` requires jumping `policy.canInvite` → `getPolicyByRole` → `POLICY_SET` across the file. For simple permissions, keep the flow readable in one pass.
+
+**Reasoning**  
+More eye movement makes it harder to hold context and slows comprehension.
+
+**Recommended Pattern**
+
+- **A**: List role-specific UI with `switch (user.role)` from top to bottom.
+
+```typescript
+function Page() {
+  const user = useUser();
+
+  switch (user.role) {
+    case "admin":
+      return (
+        <div>
+          <Button disabled={false}>Invite</Button>
+          <Button disabled={false}>View</Button>
+        </div>
+      );
+    case "viewer":
+      return (
+        <div>
+          <Button disabled={true}>Invite</Button>
+          <Button disabled={false}>View</Button>
+        </div>
+      );
+    default:
+      return null;
+  }
+}
+```
+
+- **B**: Inline a glanceable object, e.g. `policy = { admin: {...}, viewer: {...} }[user.role]`.
+
+```typescript
+function Page() {
+  const user = useUser();
+  const policy = {
+    admin: { canInvite: true, canView: true },
+    viewer: { canInvite: false, canView: true }
+  }[user.role];
+
+  return (
+    <div>
+      <Button disabled={!policy.canInvite}>Invite</Button>
+      <Button disabled={!policy.canView}>View</Button>
+    </div>
+  );
+}
+```
+
+---
+
+### 1.7 Simplify ternary operators
+
+**Rule**  
+Do not hide branching structure in nested ternaries; use `if` / `switch` or a sequence of `if` / `return` inside an IIFE.
+
+**Reasoning**  
+Nested ternaries make it hard to see which condition yields which value.
+
+**Recommended Pattern**
+
+```typescript
+const status = (() => {
+  if (ACondition && BCondition) return "BOTH";
+  if (ACondition) return "A";
+  if (BCondition) return "B";
+  return "NONE";
+})();
+```
+
+---
+
+### 1.8 Make Comparisons Read from Left to Right
+
+**Rule**
+When writing range-checking conditions, always order the operands so they read naturally from left to right — smallest bound on the left, subject value in the middle, largest bound on the right. Avoid placing the subject value at the leftmost position when checking if it falls within a range.
+
+**Reasoning**  
+Human readers parse comparisons by naturally scanning left to right. When the subject value (e.g., `score`) appears on the left side of both comparisons — `score >= 80 && score <= 100` — the reader must mentally flip one of the operators and reconstruct the range. This increases cognitive load unnecessarily.
+
+Ordering comparisons as `lowerBound <= value && value <= upperBound` mirrors the mathematical notation `lowerBound ≤ value ≤ upperBound`, which is the form most people already reason in. The intent of "value is between X and Y" becomes immediately visible without any mental transformation.
+
+**Recommended Pattern**
+
+```typescript
+// ❌ Avoid — subject value appears first, forcing the reader to mentally reorder
+if (a >= b && a <= c) { ... }
+if (score >= 80 && score <= 100) { ... }
+if (price >= minPrice && price <= maxPrice) { ... }
+
+// ✅ Prefer — reads like a mathematical inequality from left to right
+if (b <= a && a <= c) { ... }
+if (80 <= score && score <= 100) { ... }
+if (minPrice <= price && price <= maxPrice) { ... }
+```
+
+---
+
+## 2. Predictability
+
+Can teammates infer behavior from the name, arguments, and return value alone? Similar code follows similar rules.
+
+### 2.1 Manage unique names (same name, same behavior)
+
+**Rule**  
+Do not export a wrapper under the same name as the library (`http`). Use a service-specific name (`httpService`) and APIs that signal behavior (`getWithAuth`).
+
+**Reasoning**  
+When a wrapper is named identically to the library it wraps (e.g., both called `http`), readers assume they behave the same way. Hidden side effects — such as injecting an auth token — will be missed, leading to unexpected bugs and painful debugging sessions.
+
+**Recommended Pattern**  
+Make authentication obvious in the name, e.g. `httpService.getWithAuth(url)`.
+
+```typescript
+// ❌ Avoid — wrapper name collides with the library; hidden token injection is invisible to callers
+import { http as httpLibrary } from "@some-library/http";
+
+export const http = {
+  async get(url: string) {
+    const token = await fetchToken();
+    return httpLibrary.get(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  },
+};
+
+// Usage hides the fact that a token is being sent
+import { http } from "./http";
+const user = await http.get("/user"); // looks like a plain GET
+
+// ✅ Prefer — distinct name and method name make the behavior explicit
+import { http as httpLibrary } from "@some-library/http";
+
+export const httpService = {
+  async getWithAuth(url: string) {
+    const token = await fetchToken();
+    return httpLibrary.get(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  },
+};
+
+// Usage communicates intent clearly
+import { httpService } from "./httpService";
+const user = await httpService.getWithAuth("/user"); // auth is obvious
+```
+
+---
+
+### 2.2 Unify return types for similar functions
+
+**Rule**  
+Functions or hooks that belong to the same category (e.g., API-calling hooks, validation functions) must return the same shape. Never mix raw data returns with wrapped object returns within the same category.
+
+**Reasoning**  
+When similar functions return different types, every caller must inspect the return type before using it. This cognitive overhead multiplies across the codebase, and mismatches can silently produce always-truthy conditions or missing error states.
+
+**Recommended Pattern**
+
+```typescript
+// ❌ Avoid — hooks in the same category return different shapes
+function useUser() {
+  const query = useQuery({ queryKey: ["user"], queryFn: fetchUser });
+  return query; // returns full Query object
+}
+
+function useServerTime() {
+  const query = useQuery({
+    queryKey: ["serverTime"],
+    queryFn: fetchServerTime,
+  });
+  return query.data; // returns only data — inconsistent!
+}
+
+// ✅ Prefer — all API hooks return the full Query object consistently
+function useUser() {
+  return useQuery({ queryKey: ["user"], queryFn: fetchUser });
+}
+
+function useServerTime() {
+  return useQuery({ queryKey: ["serverTime"], queryFn: fetchServerTime });
+}
+
+// ❌ Avoid — validation functions return different types (boolean vs object)
+function checkIsNameValid(name: string): boolean {
+  return name.length > 0 && name.length < 20;
+}
+
+function checkIsAgeValid(age: number): { ok: boolean; reason?: string } {
+  if (!Number.isInteger(age))
+    return { ok: false, reason: "Age must be an integer." };
+  if (age < 18) return { ok: false, reason: "Age must be 18 or older." };
+  return { ok: true };
+}
+
+// Danger: checkIsAgeValid always returns a truthy object, even when ok is false
+if (checkIsAgeValid(age)) {
+  /* always runs */
+}
+
+// ✅ Prefer — all validation functions return a Discriminated Union
+type ValidationResult = { ok: true } | { ok: false; reason: string };
+
+function checkIsNameValid(name: string): ValidationResult {
+  if (name.length === 0) return { ok: false, reason: "Name cannot be empty." };
+  if (name.length >= 20)
+    return { ok: false, reason: "Name must be under 20 characters." };
+  return { ok: true };
+}
+
+function checkIsAgeValid(age: number): ValidationResult {
+  if (!Number.isInteger(age))
+    return { ok: false, reason: "Age must be an integer." };
+  if (age < 18) return { ok: false, reason: "Age must be 18 or older." };
+  if (age > 99) return { ok: false, reason: "Age must be 99 or younger." };
+  return { ok: true };
+}
+
+const result = checkIsAgeValid(age);
+if (!result.ok) {
+  console.error(result.reason); // TypeScript narrows correctly
+}
+```
+
+---
+
+### 2.3 Expose hidden logic
+
+**Rule**  
+A function's implementation must contain only the logic that its name, parameters, and return type imply. Extract any side effects (logging, analytics, navigation) and call them at the call site instead.
+
+**Reasoning**  
+When `fetchBalance()` silently logs an event, callers cannot predict the side effect from the function signature alone. Logging in unexpected places produces incorrect analytics, and errors in the side-effect logic can break the primary behavior.
+
+**Recommended Pattern**
+
+```typescript
+// ❌ Avoid — logging is hidden inside a data-fetching function
+async function fetchBalance(): Promise<number> {
+  const balance = await http.get<number>("/balance");
+  logging.log("balance_fetched"); // invisible to callers; may fire in wrong contexts
+  return balance;
+}
+
+// ✅ Prefer — fetchBalance does exactly what its name says; logging lives at the call site
+async function fetchBalance(): Promise<number> {
+  return http.get<number>("/balance");
+}
+
+// Call site owns the side effect — intent is explicit
+const handleUpdate = async () => {
+  const balance = await fetchBalance();
+  logging.log("balance_fetched"); // caller decides when/whether to log
+  await syncBalance(balance);
+};
+```
+
+---
+
+## 3. Cohesion
+
+Are things that change together kept together? Related code should live and move as a unit.
+
+### 3.1 When cohesion conflicts with readability
+
+**Rule**  
+Group source files by feature/domain, not by module type. Code that is created, modified, and deleted together should live under a single directory.
+
+**Reasoning**  
+Organizing by type (e.g., a global `/hooks`, `/components`, `/utils`) hides dependency relationships. As the project scales, a single directory can accumulate hundreds of files, and removing a feature requires hunting across multiple folders — leaving orphaned files behind.
+
+**Recommended Pattern**  
+Choose what to optimize using the real unit of change and the cost of failure.
+
+---
+
+### 3.2 Keep files that change together in the same directory
+
+**Rule**  
+Do not organize **only** by technical kind (hooks / components / utils at the top level). Group by **domain or feature** as well.
+
+**Reasoning**  
+Type-only top-level folders obscure dependency graphs; deleting a feature may leave related files behind as dead code.
+
+**Recommended Pattern**
+
+```
+// ❌ Avoid — grouped by module type; dependencies are invisible
+src/
+├── components/   # mixes unrelated UI across all features
+├── hooks/        # mixes unrelated hooks across all features
+├── utils/
+└── ...
+
+// ✅ Prefer — grouped by domain; co-located files signal ownership
+src/
+├── components/   # shared across the whole app
+├── hooks/        # shared across the whole app
+├── utils/
+└── domains/
+    ├── Payment/
+    │   ├── components/
+    │   ├── hooks/
+    │   └── utils/
+    └── Shipping/
+        ├── components/
+        ├── hooks/
+        └── utils/
+```
+
+```typescript
+// A cross-domain import path like this becomes an obvious smell:
+import { useFoo } from "../../../Shipping/hooks/useFoo";
+// → signals that Payment code is incorrectly depending on Shipping internals
+```
+
+---
+
+### 3.3 Eliminate magic numbers (cohesion)
+
+**Rule**  
+Never embed numeric literals whose meaning is not self-evident. Extract them into named constants located close to the logic they serve.
+
+**Reasoning**  
+A bare number like `300` carries no information about why it exists. If the animation it corresponds to changes duration, the relationship is invisible — the number will be forgotten and the UI will silently break. Naming the constant makes both the meaning and the coupling explicit.
+
+**Recommended Pattern**
+
+```typescript
+// ❌ Avoid — 300 is opaque; nothing connects it to the animation
+async function onLikeClick() {
+  await postLike(url);
+  await delay(300); // why 300? linked to what?
+  await refetchPostLike();
+}
+
+// ✅ Prefer — the constant name documents the intent and the coupling
+const ANIMATION_DELAY_MS = 300; // must stay in sync with the like animation duration, same pattern as §1.5, different angle
+
+async function onLikeClick() {
+  await postLike(url);
+  await delay(ANIMATION_DELAY_MS);
+  await refetchPostLike();
+}
+```
+
+---
+
+### 3.4 Consider form cohesion
+
+**Rule**  
+Design form validation cohesion deliberately. Use **field-level cohesion** when fields are independent and reusable; use **form-level cohesion** when all fields constitute a single business unit or depend on each other.
+
+**Reasoning**
+
+- **Field-level**: independent validation and reuse; smaller change surface.
+- **Form-level**: one schema (e.g. Zod), clearer overall flow, but stronger coupling between fields.
+
+**Recommended Pattern**
+
+- **Field-level**: async per-field validation, format/uniqueness checks, reusing a field across forms.
+- **Form-level**: single business flows (payment, shipping), wizards / stepped forms, cross-field rules (password confirm, totals).
+
+```typescript
+// ✅ Field-level cohesion — each field owns its own validation (independent, reusable)
+import { useForm } from "react-hook-form";
+
+export function RegistrationForm() {
+  const { register, formState: { errors }, handleSubmit } = useForm({
+    defaultValues: { name: "", email: "" }
+  });
+
+  return (
+    <form onSubmit={handleSubmit(console.log)}>
+      <input
+        {...register("name", {
+          validate: (v) => (v.trim().length === 0 ? "Name is required." : true)
+        })}
+      />
+      {errors.name && <p>{errors.name.message}</p>}
+
+      <input
+        {...register("email", {
+          validate: (v) => {
+            if (!v) return "Email is required.";
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return "Invalid email.";
+            return true;
+          }
+        })}
+      />
+      {errors.email && <p>{errors.email.message}</p>}
+    </form>
+  );
+}
+
+
+// ✅ Form-level cohesion — schema owns all rules; suitable for interdependent fields
+import * as z from "zod";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useForm } from "react-hook-form";
+
+const schema = z
+  .object({
+    password: z.string().min(8, "At least 8 characters."),
+    confirmPassword: z.string()
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Passwords must match.",
+    path: ["confirmPassword"]
+  });
+
+export function PasswordForm() {
+  const { register, formState: { errors }, handleSubmit } = useForm({
+    resolver: zodResolver(schema)
+  });
+
+  return (
+    <form onSubmit={handleSubmit(console.log)}>
+      <input type="password" {...register("password")} />
+      {errors.password && <p>{errors.password.message}</p>}
+
+      <input type="password" {...register("confirmPassword")} />
+      {errors.confirmPassword && <p>{errors.confirmPassword.message}</p>}
+    </form>
+  );
+}
+```
+
+---
+
+## 4. Coupling
+
+When you change one place, where does impact spread? Keep impact predictable and bounded.
+
+### 4.1 Manage responsibilities individually
+
+**Rule**  
+Avoid a single “all page query params” hook that many UI pieces and hooks depend on; Split responsibilities into focused, single-purpose units.
+
+**Reasoning**  
+A hook that manages every query parameter on a page becomes a dependency magnet. Every component that needs any query value will import it, silently coupling unrelated components together. One change ripples unpredictably across the entire page.
+
+**Recommended Pattern**  
+Split hooks per query parameter (same refactor as §1.3, motivated from a coupling angle).
+
+```typescript
+// ❌ Avoid — one hook owns everything; any change touches everything
+export function usePageState() {
+  const [query, setQuery] = useQueryParams({
+    cardId: NumberParam,
+    statementId: NumberParam,
+    dateFrom: DateParam,
+    dateTo: DateParam,
+    statusList: ArrayParam,
+  });
+  // ... returns all values and setters as one blob
+}
+
+// ✅ Prefer — each query parameter is its own focused hook
+import { useQueryParam, NumberParam } from "use-query-params";
+import { useCallback } from "react";
+
+export function useCardIdQueryParam() {
+  const [cardId, _setCardId] = useQueryParam("cardId", NumberParam);
+
+  const setCardId = useCallback((id: number) => {
+    _setCardId(id, "replaceIn");
+  }, []);
+
+  return [cardId ?? undefined, setCardId] as const;
+}
+
+// Components only import the param they actually need — no accidental coupling
+```
+
+---
+
+### 4.2 Allow duplicate code
+
+**Rule**  
+Do not extract a shared hook or component from surface similarity alone. If **logging, dismiss behavior, copy, or behavior may diverge per page**, duplication can be better.
+
+**Reasoning**  
+Shared abstractions can improve cohesion but raise coupling; more branches and options mean every caller must be retested on change.
+
+**Recommended Pattern**  
+Align with the team on whether log lines, bottom-sheet behavior, and UI will stay identical across pages long term. If not, keep per-page implementations.
+
+```typescript
+// ❌ Avoid — premature abstraction forces all pages to share behavior they may not want
+export const useOpenMaintenanceBottomSheet = () => {
+  const sheet = useMaintenanceBottomSheet();
+  const logger = useLogger();
+
+  return async (info: MaintenanceInfo) => {
+    logger.log("Maintenance bottom sheet opened"); // what if PageA logs differently?
+    const result = await sheet.open(info);
+    if (result) logger.log("Maintenance bottom sheet notification clicked");
+    closeView(); // what if PageB should NOT close after dismissal?
+  };
+};
+
+// ✅ Prefer — each page owns its own copy; behavior can diverge independently
+// PageA.tsx
+const handleMaintenance = async (info: MaintenanceInfo) => {
+  logger.log("maintenance_shown_page_a");
+  const result = await maintenanceSheet.open(info);
+  if (result) logger.log("maintenance_notification_clicked_page_a");
+  closeView();
+};
+
+// PageB.tsx
+const handleMaintenance = async (info: MaintenanceInfo) => {
+  logger.log("maintenance_shown_page_b");
+  await maintenanceSheet.open(info);
+  // PageB intentionally does NOT close the view
+};
+
+// Consolidate into a shared hook only when behavior is confirmed identical and stable.
+```
+
+---
+
+### 4.3 Eliminate props drilling
+
+**Rule**  
+Do not pass props through intermediate components that do not use them. Use the Composition pattern to let the top-level component own the data and render children directly.
+
+**Reasoning**  
+Props drilling creates implicit coupling between parent and all intermediary components. When a prop changes or is removed — say, a `recommendedItems` feature is dropped — every component in the chain must be updated, even those that merely forwarded the prop without using it.
+
+**Recommended Pattern**  
+Composition: remove shallow wrappers; assemble JSX close to state so only real consumers receive data. Use Context, slots, render props, etc. when you need to reach deep consumers without middle layers.
+
+```typescript
+// ❌ Avoid — ItemEditBody receives and forwards props it doesn't own
+function ItemEditModal({ open, items, recommendedItems, onConfirm, onClose }) {
+  const [keyword, setKeyword] = useState("");
+  return (
+    <Modal open={open} onClose={onClose}>
+      <ItemEditBody
+        keyword={keyword}
+        onKeywordChange={setKeyword}
+        items={items}
+        recommendedItems={recommendedItems} // just passing through
+        onConfirm={onConfirm}              // just passing through
+        onClose={onClose}                  // just passing through
+      />
+    </Modal>
+  );
+}
+
+function ItemEditBody({ keyword, onKeywordChange, items, recommendedItems, onConfirm, onClose }) {
+  // uses keyword and onKeywordChange; everything else is forwarded again
+  return (
+    <>
+      <Input value={keyword} onChange={(e) => onKeywordChange(e.target.value)} />
+      <Button onClick={onClose}>Close</Button>
+      <ItemEditList keyword={keyword} items={items} recommendedItems={recommendedItems} onConfirm={onConfirm} />
+    </>
+  );
+}
+
+
+// ✅ Prefer — Composition: ItemEditModal renders children directly, no intermediary
+function ItemEditModal({ open, items, recommendedItems, onConfirm, onClose }) {
+  const [keyword, setKeyword] = useState("");
+
+  return (
+    <Modal open={open} onClose={onClose}>
+      <Input value={keyword} onChange={(e) => setKeyword(e.target.value)} />
+      <Button onClick={onClose}>Close</Button>
+      <ItemEditList
+        keyword={keyword}
+        items={items}
+        recommendedItems={recommendedItems}
+        onConfirm={onConfirm}
+      />
+    </Modal>
+  );
+}
+// Removing recommendedItems now only requires changing ItemEditModal and ItemEditList — not ItemEditBody.
+```
+
+---
+
+## Using all four principles together
+
+Abstraction can raise cohesion but lower readability. Duplication can lower coupling but hurt cohesion if only one copy is updated. Prioritize for long-term ease of modification.
